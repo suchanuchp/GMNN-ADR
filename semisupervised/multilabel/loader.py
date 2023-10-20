@@ -92,9 +92,10 @@ class EntityFeature(object):
                 self.itof[n].append((f, w))
         fi.close()
 
-    def to_one_hot(self, binary=False):
+    def to_one_hot(self, binary=False, norm=True):
         # row-normalized, not actually one-hot
-        self.one_hot = [[0 for j in range(len(self.vocab_f))] for i in range(len(self.vocab_n))]
+        self.one_hot = np.zeros((len(self.vocab_n), len(self.vocab_f)), dtype=np.float64)
+        #[[0 for j in range(len(self.vocab_f))] for i in range(len(self.vocab_n))]
         for k in range(len(self.vocab_n)):
             sm = 0
             for fid, wt in self.itof[k]:
@@ -104,7 +105,10 @@ class EntityFeature(object):
             for fid, wt in self.itof[k]:
                 if binary:
                     wt = 1.0
-                self.one_hot[k][fid] = wt / sm
+                if norm:
+                    self.one_hot[k][fid] = wt / sm
+                else:
+                    self.one_hot[k][fid] = wt
 
 class Graph(object):
     def __init__(self, file_name, entity, weight=None):

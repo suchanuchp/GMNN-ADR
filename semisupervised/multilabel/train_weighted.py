@@ -12,11 +12,16 @@ import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
 
+from baselines import train_and_evaluate
 from trainer import Trainer
 from gnn import GNNq, GNNp
+from mlp import MLPq
 import loader
 
 parser = argparse.ArgumentParser()
+parser.add_argument('--run_baselines', type=int, default=1)
+parser.add_argument('--use_gnn_q', type=int, default=1)
+parser.add_argument('--norm_feature', type=int, default=1)
 parser.add_argument('--dataset', type=str, default='data')
 parser.add_argument('--save', type=str,
                     default='/Users/suchanuchpiriyasatit/Documents/Tsinghua/Research/GMNN-ADR/semisupervised')
@@ -38,6 +43,7 @@ parser.add_argument('--cuda', type=bool, default=torch.cuda.is_available())
 parser.add_argument('--cpu', action='store_true', help='Ignore CUDA.')
 args = parser.parse_args()
 
+
 torch.manual_seed(args.seed)
 np.random.seed(args.seed)
 random.seed(args.seed)
@@ -47,6 +53,14 @@ elif args.cuda:
     torch.cuda.manual_seed(args.seed)
 
 opt = vars(args)
+
+print(opt)
+# net_file = opt['dataset'] + '/weighted-net-ppi-filtered.txt'
+# label_file = opt['dataset'] + '/multi-label-se50-ppi-filtered.txt'
+# feature_file = opt['dataset'] + '/chem_rad2_ppi_feature_ppi_filtered.txt'
+# train_file = opt['dataset'] + '/train-ppi.txt'
+# dev_file = opt['dataset'] + '/dev-ppi.txt'
+# test_file = opt['dataset'] + '/test-ppi.txt'
 
 net_file = opt['dataset'] + '/weighted-net.txt'
 label_file = opt['dataset'] + '/multi-label-se50.txt'
@@ -67,7 +81,12 @@ graph = loader.Graph(file_name=net_file, entity=[vocab_node, 0, 1], weight=2)
 label = loader.EntityLabel(file_name=label_file, entity=[vocab_node, 0], label=[vocab_label, 1])
 feature = loader.EntityFeature(file_name=feature_file, entity=[vocab_node, 0], feature=[vocab_feature, 1])
 graph.to_symmetric(opt['self_link_weight'])
-feature.to_one_hot(binary=True)  # TODO: check this
+
+if opt['norm_feature']:
+    feature.to_one_hot(binary=True, norm=True)  # TODO: check this
+else:
+    feature.to_one_hot(binary=True, norm=False)
+
 adj = graph.get_sparse_adjacency(opt['cuda'])
 
 
@@ -78,6 +97,12 @@ with open(dev_file, 'r') as fi:
 with open(test_file, 'r') as fi:
     idx_test = [vocab_node.stoi[line.strip()] for line in fi]
 idx_all = list(range(opt['num_node']))
+
+if opt['run_baselines']:
+    print('running baselines')
+    xs = feature.one_hot
+    ys = label.multi_hot_labels
+    train_and_evaluate('SVM', xs, ys, idx_train, idx_dev, idx_test)
 
 inputs = torch.Tensor(feature.one_hot)
 target = torch.LongTensor(label.multi_hot_labels)
@@ -91,8 +116,6 @@ inputs_p = torch.zeros(opt['num_node'], opt['num_class'])
 target_p = torch.zeros(opt['num_node'], opt['num_class'])
 
 class_weights = idx_train.size(0)/(torch.sum(target[idx_train], dim=0))
-print('s')
-print(class_weights.size())
 
 if opt['cuda']:
     inputs = inputs.cuda()
@@ -106,8 +129,11 @@ if opt['cuda']:
     inputs_p = inputs_p.cuda()
     target_p = target_p.cuda()
 
-gnnq = GNNq(opt, adj)
-trainer_q = Trainer(opt, gnnq, class_weights=class_weights)  # TODO: Modify trainer
+if opt['use_gnn_q']:
+    model_q = GNNq(opt, adj)
+else:
+    model_q = MLPq(opt)
+trainer_q = Trainer(opt, model_q, class_weights=class_weights)  # TODO: Modify trainer
 
 gnnp = GNNp(opt, adj)
 trainer_p = Trainer(opt, gnnp, class_weights=class_weights)
@@ -140,6 +166,11 @@ def update_q_data():
         # temp = torch.zeros(idx_train.size(0), target_q.size(1)).type_as(target_q)
         # temp.scatter_(1, torch.unsqueeze(target[idx_train], 1), 1.0)
         target_q[idx_train].copy_(target[idx_train])
+
+def run_baselines(epoches):
+
+    pass
+
 
 def pre_train(epoches):
     best = 0.0
@@ -199,6 +230,7 @@ for k in range(opt['iter']):
     p_results += train_p(opt['epoch'])
     q_results += train_q(opt['epoch'])
 
+#loss.item(), preds, eval_metric['glob-AUROC'].item(), eval_metric
 def get_accuracy(results):
     best_dev, acc_test, m_test = 0.0, 0.0, None
     for d, t, _, m_t in results:
@@ -208,10 +240,15 @@ def get_accuracy(results):
 
 acc_test, m_test = get_accuracy(q_results)
 
-print('------------------final metric------------------')
+print('------------------final metric Q------------------')
+print(m_test)
+
+acc_test, m_test = get_accuracy(p_results)
+
+print('------------------final metric P------------------')
 print(m_test)
 
 if opt['save'] != '/':
-    trainer_q.save(opt['save'] + '/gnnq.pt')
-    trainer_p.save(opt['save'] + '/gnnp.pt')
+    trainer_q.save(opt['save'] + '-gnnq.pt')
+    trainer_p.save(opt['save'] + '-gnnp.pt')
 
