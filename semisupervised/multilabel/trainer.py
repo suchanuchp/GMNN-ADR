@@ -2,6 +2,7 @@ import math
 import numpy as np
 import torch
 from torch import nn
+from torch import autograd
 from torch.nn import init
 from torch.autograd import Variable
 import torch.nn.functional as F
@@ -61,10 +62,13 @@ class Trainer(object):
 
         self.model.train()
         self.optimizer.zero_grad()
-
+        # with autograd.detect_anomaly():
         logits = self.model(inputs)
-        loss = self.criterion(logits[idx], target[idx])
-
+        reg = getattr(self.model, "regularized_term", None)
+        reg_term = 0
+        if callable(reg):
+            reg_term = reg()
+        loss = self.criterion(logits[idx], target[idx]) + self.opt['decay']*reg_term
         loss.backward()
         self.optimizer.step()
         return loss.item()
@@ -81,15 +85,16 @@ class Trainer(object):
         loss = self.criterion(logits[idx], target[idx])
 
         pred_probs = torch.sigmoid(logits)
+        # print(pred_probs)
 
         target = target[idx]
         pred_probs = pred_probs[idx]
 
         # print('# invalid recall indices', torch.sum(torch.sum(target, dim=0) == 0))
 
-        defined_recall_mask = torch.sum(target, dim=0) > 0
-        target = target[:,  defined_recall_mask]
-        pred_probs = pred_probs[:, defined_recall_mask]
+        # defined_recall_mask = torch.sum(target, dim=0) > 0
+        # target = target[:,  defined_recall_mask]
+        # pred_probs = pred_probs[:, defined_recall_mask]
 
         preds = pred_probs.detach().clone()
         preds[preds >= 0.5] = 1.
@@ -104,33 +109,37 @@ class Trainer(object):
 
         eval_metric = dict()
 
-        eval_metric['class-AUROC'] = binary_auroc(pred_probs_t, target_t, num_tasks=n_class).mean()
+        auroc = binary_auroc(pred_probs_t, target_t, num_tasks=n_class)
+        eval_metric['class-AUROC'] = auroc.mean()
         eval_metric['glob-AUROC'] = binary_auroc(glob_pred, glob_target)
 
-
-        eval_metric['class-AUPRC'] = binary_auprc(pred_probs_t, target_t, num_tasks=n_class).mean()
+        auprc = binary_auprc(pred_probs_t, target_t, num_tasks=n_class)
+        eval_metric['class-AUPRC'] = auprc.mean()
         eval_metric['glob-AUPRC'] = binary_auprc(glob_pred, glob_target)
 
+        correct = preds.eq(target).double()
+        acc_col = (torch.sum(correct, dim=0) / target.size(0)).mean()
+        accuracy = correct.sum() / (target.size(0) * target.size(1))
+        eval_metric['class-accuracy'] = acc_col.mean()
+        eval_metric['glob-accuracy'] = accuracy
 
         if all_metrics:
-
-
+            eval_metric['precision'] = precision(pred_probs, target, task='multilabel', num_labels=n_class,
+                                                 average=None)
+            eval_metric['accuracy'] = (torch.sum(correct, dim=0) / target.size(0))
+            eval_metric['AUROC'] = auroc
+            eval_metric['AUPRC'] = auprc
             eval_metric['glob-precision'] = precision(pred_probs, target, task='multilabel',
                                                       num_labels=n_class, average='micro')
             eval_metric['class-precision'] = precision(pred_probs, target, task='multilabel',
                                                        num_labels=n_class, average='macro')
-
+            eval_metric['specificity'] = specificity(pred_probs, target, task='multilabel',
+                                                          num_labels=n_class, average='micro')
             eval_metric['glob-specificity'] = specificity(pred_probs, target, task='multilabel',
                                                           num_labels=n_class, average='micro')
             eval_metric['class-specificity'] = specificity(pred_probs, target, task='multilabel',
                                                            num_labels=n_class, average='macro')
-
-        correct = preds.eq(target).double()
-        acc_col = (torch.sum(correct, dim=0)/target.size(0)).mean()
-        accuracy = correct.sum() / (target.size(0) * target.size(1))
-        eval_metric['class-accuracy'] = acc_col
-        eval_metric['glob-accuracy'] = accuracy
-
+        # print(loss.item())
         return loss.item(), preds, eval_metric['glob-AUROC'].item(), eval_metric
 
     def predict(self, inputs, tau=1):
@@ -138,9 +147,15 @@ class Trainer(object):
             inputs = inputs.cuda()
 
         self.model.eval()
+        # print('before sigmoid')
+        # print(self.model(inputs).detach())
+        # print('before tau')
+        # print(torch.sigmoid(self.model(inputs)).detach())
 
         logits = self.model(inputs) / tau
         logits = torch.sigmoid(logits).detach()
+        # print('in predict')
+        # print(logits)
 
         return logits
 
