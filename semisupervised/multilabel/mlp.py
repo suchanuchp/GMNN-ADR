@@ -14,7 +14,6 @@ class MLPq(nn.Module):
         self.bias = Parameter(torch.FloatTensor(opt['hidden_dim']))
         self.out1 = opt['hidden_dim']
 
-        self.weight2 = Parameter(torch.Tensor(opt['hidden_dim'], opt['num_class']))
         self.weight2 = Parameter(torch.Tensor(opt['num_class'], opt['hidden_dim']))
         self.bias2 = Parameter(torch.FloatTensor(opt['num_class']))
         self.out2 = opt['num_class']
@@ -22,12 +21,16 @@ class MLPq(nn.Module):
         if opt['cuda']:
             self.cuda()
 
+        self.reset()
+
     def reset(self):
         stdv = 1. / math.sqrt(self.out1)
         self.weight.data.uniform_(-stdv, stdv)
+        self.bias.data.uniform_(-stdv, stdv)
 
         stdv = 1. / math.sqrt(self.out2)
         self.weight2.data.uniform_(-stdv, stdv)
+        self.bias2.data.uniform_(-stdv, stdv)
 
     def forward(self, x):
         x = F.dropout(x, self.opt['input_dropout'], training=self.training)
